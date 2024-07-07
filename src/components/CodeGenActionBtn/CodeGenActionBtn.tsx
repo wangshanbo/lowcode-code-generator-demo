@@ -1,13 +1,10 @@
 import './CodeGenActionBtn.scss';
-
-import React, { useState } from 'react';
-
+import React, { useState, useCallback } from 'react';
 import * as CodeGenerator from '@alilc/lowcode-code-generator/standalone-loader';
 import type { ILowCodePluginContext } from '@alilc/lowcode-engine';
 import { ProjectSchema, TransformStage } from '@alilc/lowcode-types';
 import { Button, Drawer, Loading, Message } from '@alifd/next';
 import coerce from 'semver/functions/coerce';
-
 import { CodeGenResult } from '../CodeGenResult';
 
 export function CodeGenActionBtn({ ctx }: { ctx: ILowCodePluginContext }) {
@@ -21,19 +18,16 @@ export function CodeGenActionBtn({ ctx }: { ctx: ILowCodePluginContext }) {
     originalSchema: null as ProjectSchema | null,
   });
 
-  const handleClick = async () => {
+  const handleClick = useCallback(async () => {
     try {
-      // 打开基于 Gravity 的编辑器/出码预览器
       setState((prev) => ({ ...prev, loading: true, visible: true, hasError: false }));
 
-      // 获取 schema，并修正
       const originalSchema = await ctx.project.exportSchema(TransformStage.Save);
       const schema = await fixSchema(originalSchema);
       console.log('got schema: ', schema);
 
       setState((prev) => ({ ...prev, schema, originalSchema }));
 
-      // 出码...
       const result = await CodeGenerator.generateCode({
         solution: 'icejs',
         schema,
@@ -45,9 +39,13 @@ export function CodeGenActionBtn({ ctx }: { ctx: ILowCodePluginContext }) {
       setState((prev) => ({ ...prev, loading: false, result }));
     } catch (e) {
       console.error('failed to run code generator: ', e);
-      setState((prev) => ({ ...prev, hasError: true, error: e instanceof Error ? e : new Error(`${(e as { message: string })?.message || e}`) }));
+      setState((prev) => ({
+        ...prev,
+        hasError: true,
+        error: e instanceof Error ? e : new Error(`${(e as { message: string })?.message || e}`),
+      }));
     }
-  };
+  }, [ctx]);
 
   return (
     <>
@@ -58,60 +56,45 @@ export function CodeGenActionBtn({ ctx }: { ctx: ILowCodePluginContext }) {
         visible={state.visible}
         title="出码结果"
         width="95vw"
-        onClose={() => {
-          setState((prev) => ({ ...prev, visible: false }));
-        }}
+        onClose={() => setState((prev) => ({ ...prev, visible: false }))}
       >
         <div className="code-gen-plugin-result">
-          {(() => {
-            if (state.hasError) {
-              return (
-                <Message type="error" title="出错了">
-                  {state.error?.message}
-                </Message>
-              );
-            }
-
-            if (state.loading) {
-              return <Loading className="code-gen-plugin-loading" tip="正在出码..." />;
-            }
-
-            return <CodeGenResult result={state.result} schema={state.schema} originalSchema={state.originalSchema} />;
-          })()}
+          {state.hasError ? (
+            <Message type="error" title="出错了">
+              {state.error?.message}
+            </Message>
+          ) : state.loading ? (
+            <Loading className="code-gen-plugin-loading" tip="正在出码..." />
+          ) : (
+            <CodeGenResult result={state.result} schema={state.schema} originalSchema={state.originalSchema} />
+          )}
         </div>
       </Drawer>
     </>
   );
 }
 
-export async function fixSchema(schema: ProjectSchema): Promise<ProjectSchema> {
+async function fixSchema(schema: ProjectSchema): Promise<ProjectSchema> {
   return deepClone({
     ...schema,
     componentsMap: schema.componentsMap
-      .filter((c) => c.package) // 去掉没有 package 的组件
-      .map((c) => {
-        // 修正版本号（对于没有有效版本号的组件，默认使用 latest）
-        if (!isValidVersion(c.version)) {
-          console.warn('[WARN] got invalid version "%o" for component "%s", use "latest" as fallback', c.version, c);
-          return {
-            ...c,
-            version: 'latest',
-          };
-        }
-
-        // 修正 @alifd/pro-layout 的版本
-        // -- 这个包没有 ^0.1.0 的版本，这里暂且替换下
-        if (c.package === '@alifd/pro-layout' && c.version === '^0.1.0') {
-          console.warn('[WARN] got invalid version "%o" for "@alifd/pro-layout"! use "latest" as fallback', c.version);
-          return {
-            ...c,
-            version: 'latest',
-          };
-        }
-
-        return c;
-      }),
+      .filter((c) => c.package)
+      .map(fixComponentVersion),
   });
+}
+
+function fixComponentVersion(component: { package: string; version: string }) {
+  if (!isValidVersion(component.version)) {
+    console.warn('[WARN] got invalid version "%o" for component "%s", use "latest" as fallback', component.version, component.package);
+    return { ...component, version: 'latest' };
+  }
+
+  if (component.package === '@alifd/pro-layout' && component.version === '^0.1.0') {
+    console.warn('[WARN] got invalid version "%o" for "@alifd/pro-layout"! use "1.0.1" as fallback', component.version);
+    return { ...component, version: '1.0.1' };
+  }
+
+  return component;
 }
 
 function deepClone<T>(x: T): T {
